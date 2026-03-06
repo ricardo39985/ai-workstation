@@ -55,7 +55,7 @@ pillow \
 tqdm \
 gradio
 
-echo "Installing Diffusers from source (required for ZImage)..."
+echo "Installing Diffusers from source..."
 
 pip install git+https://github.com/huggingface/diffusers
 
@@ -85,17 +85,15 @@ echo "Environment ready."
 download_qwen() {
 
 echo ""
-echo "Downloading Qwen model..."
+echo "Downloading Qwen..."
 
 python <<EOF
 from huggingface_hub import snapshot_download
-
 snapshot_download(
 repo_id="Qwen/Qwen3.5-27B-FP8",
 local_dir="/workspace/models/qwen",
 local_dir_use_symlinks=False
 )
-
 print("Qwen download complete")
 EOF
 
@@ -108,13 +106,11 @@ echo "Downloading Z-Image-Turbo..."
 
 python <<EOF
 from huggingface_hub import snapshot_download
-
 snapshot_download(
 repo_id="Tongyi-MAI/Z-Image-Turbo",
 local_dir="/workspace/models/zimage",
 local_dir_use_symlinks=False
 )
-
 print("ZImage download complete")
 EOF
 
@@ -125,7 +121,6 @@ launch_image_server() {
 echo "Starting Z-Image server..."
 
 cat << 'PY' > $SERVER_DIR/zimage_server.py
-
 import torch
 import gradio as gr
 from diffusers import ZImagePipeline
@@ -139,26 +134,23 @@ low_cpu_mem_usage=False
 pipe.to("cuda")
 
 def generate(prompt):
-
-image = pipe(
-prompt=prompt,
-height=1024,
-width=1024,
-guidance_scale=3.5,
-num_inference_steps=8
-).images[0]
-
-return image
+    image = pipe(
+        prompt=prompt,
+        height=1024,
+        width=1024,
+        guidance_scale=3.5,
+        num_inference_steps=8
+    ).images[0]
+    return image
 
 demo = gr.Interface(
-fn=generate,
-inputs="text",
-outputs="image",
-title="Z-Image Turbo"
+    fn=generate,
+    inputs="text",
+    outputs="image",
+    title="Z-Image Turbo"
 )
 
 demo.launch(server_name="0.0.0.0", server_port=7860)
-
 PY
 
 python $SERVER_DIR/zimage_server.py
