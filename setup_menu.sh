@@ -8,39 +8,41 @@ set -u
 # -------
 # Bootstraps an ephemeral RunPod AI workstation with:
 # - ComfyUI for image generation UI
-# - A starter SDXL model pack that is actually usable immediately
-# - vLLM for Qwen in a separate venv
+# - SDXL starter pack for immediate use
+# - optional FLUX.1-dev download through Hugging Face auth
+# - vLLM for Qwen in a separate virtual environment
 #
-# DESIGN
+# INFRA / INTENT
+# --------------
+# - Target runtime: ephemeral RunPod GPU pod
+# - Current GPU target: RTX A6000 48GB VRAM
+# - Repo/script lives in GitHub and is re-run on fresh pods
+# - Image stack and LLM stack stay isolated to avoid dependency conflicts
+#
+# ACCESS
 # ------
-# - Pod is ephemeral/disposable
-# - Script is intended to reconstruct the workstation from scratch
-# - ComfyUI runs on port 8888 because RunPod commonly exposes that already
-# - Image stack and LLM stack are isolated in separate virtualenvs
+# - ComfyUI runs on port 8888
+# - In browser, use the RunPod-exposed 8888 link (often the Jupyter link)
+# - Do NOT try to open http://0.0.0.0:8888 directly
 #
-# WHAT THIS SCRIPT HANDLES
-# ------------------------
-# - Installs ComfyUI
-# - Creates model folder structure
-# - Downloads an SDXL starter pack:
-#     * SDXL base checkpoint
-#     * SDXL fp16 VAE fix
-# - Prints model directories and discovered files
-# - Launches ComfyUI with clear access notes
+# - vLLM runs on port 8000
+# - Open WebUI / other clients should use:
+#   http://<pod-ip>:8000/v1
 #
-# MODEL DIRECTORIES
-# -----------------
+# MODEL LAYOUT
+# ------------
 # /workspace/models/checkpoints
 # /workspace/models/loras
 # /workspace/models/text_encoders
 # /workspace/models/vae
 # /workspace/models/clip_vision
 #
-# IMPORTANT ACCESS NOTE
-# ---------------------
-# - ComfyUI binds to 0.0.0.0:8888 inside the pod.
-# - In your browser, use the RunPod-exposed link for port 8888.
-#   Do NOT browse directly to 0.0.0.0.
+# IMPORTANT
+# ---------
+# - SDXL starter pack is auto-downloadable
+# - FLUX.1-dev is gated on Hugging Face and requires:
+#   1) HF login already configured
+#   2) access approved for the account
 ###############################################################################
 
 WORKSPACE="/workspace"
@@ -184,6 +186,26 @@ EOF
   print_model_layout
 }
 
+check_hf_auth() {
+  ensure_venv "$VENV_IMG"
+
+  say "CHECKING HUGGING FACE AUTH"
+
+  python_in_venv "$VENV_IMG" - <<'PY'
+from huggingface_hub import HfApi
+from huggingface_hub.utils import HfHubHTTPError
+
+try:
+    info = HfApi().whoami()
+    print("Hugging Face auth is configured.")
+    print("User:", info.get("name") or info.get("fullname") or info)
+except Exception as e:
+    print("Hugging Face auth not available in this environment.")
+    print("You need to login on the pod first.")
+    print("Error:", e)
+PY
+}
+
 install_sdxl_starter_pack() {
   ensure_venv "$VENV_IMG"
   prepare_model_layout
@@ -228,6 +250,62 @@ PY
   echo "  $MODEL_DIR/vae"
   echo ""
 
+  print_model_layout
+}
+
+install_flux_dev() {
+  ensure_venv "$VENV_IMG"
+  prepare_model_layout
+
+  say "Installing FLUX.1-dev checkpoint"
+
+  python_in_venv "$VENV_IMG" - <<'PY'
+from pathlib import Path
+from huggingface_hub import hf_hub_download, HfApi
+from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError, LocalTokenNotFoundError
+from huggingface_hub.utils import HfHubHTTPError
+
+target = Path("/workspace/models/checkpoints")
+target.mkdir(parents=True, exist_ok=True)
+
+print("Target directory:", target)
+
+try:
+    info = HfApi().whoami()
+    print("Authenticated as:", info.get("name") or info.get("fullname") or info)
+except Exception as e:
+    print("ERROR: Hugging Face auth is not configured for this environment.")
+    print("Login on the pod first, then retry.")
+    print("Details:", e)
+    raise SystemExit(1)
+
+try:
+    print("Downloading FLUX.1-dev...")
+    path = hf_hub_download(
+        repo_id="black-forest-labs/FLUX.1-dev",
+        filename="flux1-dev.safetensors",
+        local_dir=str(target),
+        local_dir_use_symlinks=False,
+    )
+    print("FLUX download complete:")
+    print(path)
+
+except Exception as e:
+    text = str(e)
+    print("")
+    print("FLUX download failed.")
+    print("Most common reason: your Hugging Face account is not approved for FLUX.1-dev yet.")
+    print("Open the model page, request/confirm access, then retry.")
+    print("")
+    print("Model page:")
+    print("  https://huggingface.co/black-forest-labs/FLUX.1-dev")
+    print("")
+    print("Raw error:")
+    print(text)
+    raise SystemExit(1)
+PY
+
+  echo ""
   print_model_layout
 }
 
@@ -341,13 +419,15 @@ menu() {
     echo "1  System Status"
     echo "2  Install Image Environment (ComfyUI)"
     echo "3  Prepare Model Folder Layout"
-    echo "4  Install SDXL Starter Pack"
-    echo "5  Show Model Directory Status"
-    echo "6  Launch ComfyUI (port ${COMFY_PORT})"
-    echo "7  Install LLM Environment"
-    echo "8  Launch Qwen vLLM Server (port ${LLM_PORT})"
-    echo "9  Show Access Notes"
-    echo "10 Exit"
+    echo "4  Check Hugging Face Auth"
+    echo "5  Install SDXL Starter Pack"
+    echo "6  Install FLUX.1-dev Checkpoint"
+    echo "7  Show Model Directory Status"
+    echo "8  Launch ComfyUI (port ${COMFY_PORT})"
+    echo "9  Install LLM Environment"
+    echo "10 Launch Qwen vLLM Server (port ${LLM_PORT})"
+    echo "11 Show Access Notes"
+    echo "12 Exit"
     echo ""
 
     read -r -p "Select option: " choice
@@ -356,13 +436,15 @@ menu() {
       1) system_status ;;
       2) install_image_env ;;
       3) prepare_model_layout ;;
-      4) install_sdxl_starter_pack ;;
-      5) print_model_layout ;;
-      6) launch_comfyui ;;
-      7) install_llm_env ;;
-      8) launch_qwen_vllm ;;
-      9) write_access_notes; cat "$WORKSPACE/ACCESS_NOTES.txt" ;;
-      10) exit 0 ;;
+      4) check_hf_auth ;;
+      5) install_sdxl_starter_pack ;;
+      6) install_flux_dev ;;
+      7) print_model_layout ;;
+      8) launch_comfyui ;;
+      9) install_llm_env ;;
+      10) launch_qwen_vllm ;;
+      11) write_access_notes; cat "$WORKSPACE/ACCESS_NOTES.txt" ;;
+      12) exit 0 ;;
       *) echo "Invalid option" ;;
     esac
   done
