@@ -31,6 +31,9 @@ echo "Installing environment..."
 
 pip install --upgrade pip setuptools wheel
 
+echo "Removing conflicting packages..."
+pip uninstall -y diffusers transformers xformers torch torchvision torchaudio
+
 echo "Installing PyTorch..."
 
 pip install \
@@ -40,11 +43,9 @@ torchaudio \
 --index-url https://download.pytorch.org/whl/cu121
 
 echo "Installing xformers..."
-
 pip install xformers==0.0.26.post1
 
 echo "Installing base libraries..."
-
 pip install \
 transformers \
 accelerate \
@@ -55,12 +56,10 @@ pillow \
 tqdm \
 gradio
 
-echo "Installing Diffusers from source..."
-
-pip install git+https://github.com/huggingface/diffusers
+echo "Installing latest Diffusers from source (required for ZImage)..."
+pip install --force-reinstall git+https://github.com/huggingface/diffusers
 
 echo "Installing vLLM dependencies..."
-
 pip install \
 cmake \
 ninja \
@@ -74,10 +73,8 @@ lm-format-enforcer==0.9.8 \
 outlines==0.0.34
 
 echo "Installing vLLM..."
-
 pip install vllm==0.4.2
 
-echo ""
 echo "Environment ready."
 
 }
@@ -123,7 +120,15 @@ echo "Starting Z-Image server..."
 cat << 'PY' > $SERVER_DIR/zimage_server.py
 import torch
 import gradio as gr
-from diffusers import ZImagePipeline
+
+try:
+    from diffusers import ZImagePipeline
+except Exception as e:
+    print("Failed to import ZImagePipeline from diffusers.")
+    print(e)
+    raise
+
+print("Loading model...")
 
 pipe = ZImagePipeline.from_pretrained(
 "/workspace/models/zimage",
@@ -159,7 +164,7 @@ python $SERVER_DIR/zimage_server.py
 
 launch_qwen_server() {
 
-echo "Starting Qwen vLLM server..."
+echo "Starting Qwen server..."
 
 python -m vllm.entrypoints.openai.api_server \
 --model /workspace/models/qwen \
