@@ -1,6 +1,5 @@
 #!/bin/bash
 
-set -e
 
 WORKSPACE="/workspace"
 MODEL_DIR="$WORKSPACE/models"
