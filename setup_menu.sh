@@ -35,11 +35,15 @@ install_env() {
 echo ""
 echo "Installing environment..."
 
-pip install --upgrade pip
+pip install --upgrade pip setuptools wheel
 
+# install CUDA compatible PyTorch
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# install AI stack
 pip install \
-torch torchvision \
-transformers diffusers \
+transformers==4.41.2 \
+diffusers==0.29.2 \
 accelerate \
 safetensors \
 huggingface_hub \
@@ -48,6 +52,7 @@ pillow \
 tqdm \
 gradio
 
+# install vLLM pinned version
 pip install vllm==0.4.2 --no-deps
 
 echo ""
@@ -62,12 +67,16 @@ echo "Downloading Z-Image-Turbo..."
 
 python <<EOF
 from diffusers import DiffusionPipeline
+import torch
 
 model="Tongyi-MAI/Z-Image-Turbo"
 
 print("Downloading:",model)
 
-pipe=DiffusionPipeline.from_pretrained(model)
+pipe=DiffusionPipeline.from_pretrained(
+    model,
+    torch_dtype=torch.float16
+)
 
 print("Download complete")
 EOF
