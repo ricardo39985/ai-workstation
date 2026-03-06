@@ -4,15 +4,15 @@ set -u
 WORKSPACE="/workspace"
 CACHE_DIR="$WORKSPACE/hf_cache"
 MODEL_DIR="$WORKSPACE/models"
-SERVER_DIR="$WORKSPACE/servers"
-
-VENV_ZIMG="$WORKSPACE/venv_zimg"
+REPO_DIR="$WORKSPACE/repos"
+VENV_IMG="$WORKSPACE/venv_img"
 VENV_LLM="$WORKSPACE/venv_llm"
 
-mkdir -p "$CACHE_DIR" "$MODEL_DIR" "$SERVER_DIR"
-mkdir -p "$MODEL_DIR/zimage" "$MODEL_DIR/qwen"
+COMFY_DIR="$REPO_DIR/ComfyUI"
 
-# Prefer HF_HOME (TRANSFORMERS_CACHE is deprecated)
+mkdir -p "$CACHE_DIR" "$MODEL_DIR" "$REPO_DIR"
+mkdir -p "$MODEL_DIR/checkpoints" "$MODEL_DIR/loras" "$MODEL_DIR/text_encoders" "$MODEL_DIR/vae" "$MODEL_DIR/clip_vision"
+
 export HF_HOME="$CACHE_DIR"
 
 say() { echo -e "\n[$(date +%H:%M:%S)] $*\n"; }
@@ -41,141 +41,108 @@ pip_in_venv() {
   "$venv_path/bin/python" -m pip "$@"
 }
 
-python_in_venv() {
-  local venv_path="$1"; shift
-  "$venv_path/bin/python" "$@"
+ensure_comfyui_repo() {
+  if [ ! -d "$COMFY_DIR/.git" ]; then
+    say "Cloning ComfyUI"
+    git clone https://github.com/Comfy-Org/ComfyUI.git "$COMFY_DIR"
+  else
+    say "Updating ComfyUI"
+    git -C "$COMFY_DIR" pull --ff-only || true
+  fi
 }
 
-# ---------------------------
-# Z-IMAGE (guaranteed path)
-# ---------------------------
-install_zimage_env() {
-  ensure_venv "$VENV_ZIMG"
+install_image_env() {
+  ensure_venv "$VENV_IMG"
+  ensure_comfyui_repo
 
-  say "Installing Z-Image env (torch 2.4.1 cu124 + diffusers from source w/ ZImagePipeline)"
+  say "Installing image environment for ComfyUI + FLUX"
 
-  pip_in_venv "$VENV_ZIMG" install -U pip setuptools wheel
+  pip_in_venv "$VENV_IMG" install -U pip setuptools wheel
 
-  # Clean only inside the venv (never touches system python)
-  pip_in_venv "$VENV_ZIMG" uninstall -y torch torchvision torchaudio diffusers transformers xformers >/dev/null 2>&1 || true
-
-  # PyTorch >= 2.4 requirement you hit earlier -> use cu124 wheels
-  pip_in_venv "$VENV_ZIMG" install \
-    torch==2.4.1 torchvision torchaudio \
+  pip_in_venv "$VENV_IMG" install \
+    torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cu124
 
-  # Core deps
-  pip_in_venv "$VENV_ZIMG" install \
-    "transformers>=4.45,<5" \
-    accelerate safetensors huggingface_hub sentencepiece pillow tqdm gradio
+  pip_in_venv "$VENV_IMG" install -r "$COMFY_DIR/requirements.txt"
 
-  # Official repo says install diffusers from source for Z-Image support. :contentReference[oaicite:2]{index=2}
-  pip_in_venv "$VENV_ZIMG" install --upgrade --force-reinstall \
-    git+https://github.com/huggingface/diffusers
-
-  say "Verifying ZImagePipeline import..."
-  python_in_venv "$VENV_ZIMG" - <<'PY'
-from diffusers import ZImagePipeline
-print("OK: ZImagePipeline import works")
-PY
+  say "Image environment ready"
 }
 
-download_zimage() {
-  ensure_venv "$VENV_ZIMG"
-  say "Downloading Tongyi-MAI/Z-Image-Turbo to /workspace/models/zimage"
-  python_in_venv "$VENV_ZIMG" - <<'PY'
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id="Tongyi-MAI/Z-Image-Turbo",
-    local_dir="/workspace/models/zimage",
-    local_dir_use_symlinks=False,
-)
-print("Download complete: /workspace/models/zimage")
-PY
+download_flux_base() {
+  ensure_venv "$VENV_IMG"
+
+  say "This script does not install the uncensored LoRA."
+  say "It is prepared for standard FLUX workflows in ComfyUI."
+
+  cat <<'EOF'
+
+You will still need the normal FLUX model assets placed in the ComfyUI model folders.
+Recommended folders:
+- /workspace/models/checkpoints
+- /workspace/models/text_encoders
+- /workspace/models/vae
+- /workspace/models/loras
+
+Then point ComfyUI at /workspace/models using extra_model_paths.yaml.
+
+EOF
 }
 
-launch_zimage_ui() {
-  ensure_venv "$VENV_ZIMG"
-  say "Writing Z-Image Gradio server to /workspace/servers/zimage_server.py"
+write_comfy_model_paths() {
+  ensure_comfyui_repo
 
-  cat > "$SERVER_DIR/zimage_server.py" <<'PY'
-import torch
-import gradio as gr
-from diffusers import ZImagePipeline
+  say "Writing ComfyUI extra_model_paths.yaml"
 
-MODEL_PATH = "/workspace/models/zimage"
+  cat > "$COMFY_DIR/extra_model_paths.yaml" <<EOF
+comfyui:
+  base_path: /workspace/models
+  checkpoints: checkpoints
+  loras: loras
+  vae: vae
+  text_encoders: text_encoders
+  clip_vision: clip_vision
+EOF
 
-# Official repo example uses bfloat16 and recommends:
-# num_inference_steps=9 (8 forwards) and guidance_scale=0.0 for Turbo. :contentReference[oaicite:3]{index=3}
-pipe = ZImagePipeline.from_pretrained(
-    MODEL_PATH,
-    torch_dtype=torch.bfloat16,
-    low_cpu_mem_usage=False,
-)
-pipe.to("cuda")
-
-def generate(prompt: str, seed: int = 42):
-    g = torch.Generator("cuda").manual_seed(int(seed))
-    img = pipe(
-        prompt=prompt,
-        height=1024,
-        width=1024,
-        num_inference_steps=9,
-        guidance_scale=0.0,
-        generator=g,
-    ).images[0]
-    return img
-
-demo = gr.Interface(
-    fn=generate,
-    inputs=[
-        gr.Textbox(label="Prompt"),
-        gr.Number(value=42, precision=0, label="Seed"),
-    ],
-    outputs=gr.Image(type="pil", label="Output"),
-    title="Z-Image-Turbo (Gradio)",
-)
-
-demo.launch(server_name="0.0.0.0", server_port=7860)
-PY
-
-  say "Launching Z-Image UI on :7860 (RunPod will expose an HTTP link for 7860)"
-  "$VENV_ZIMG/bin/python" "$SERVER_DIR/zimage_server.py"
+  say "Wrote $COMFY_DIR/extra_model_paths.yaml"
 }
 
-# ---------------------------
-# LLM / vLLM (isolated, best-effort)
-# ---------------------------
+launch_comfyui() {
+  ensure_venv "$VENV_IMG"
+  ensure_comfyui_repo
+  write_comfy_model_paths
+
+  say "Launching ComfyUI on port 8188"
+  cd "$COMFY_DIR"
+  "$VENV_IMG/bin/python" main.py --listen 0.0.0.0 --port 8188 --extra-model-paths-config "$COMFY_DIR/extra_model_paths.yaml"
+}
+
 install_llm_env() {
   ensure_venv "$VENV_LLM"
 
-  say "Installing LLM env (isolated) - best effort vLLM"
+  say "Installing isolated LLM environment"
+
   pip_in_venv "$VENV_LLM" install -U pip setuptools wheel
 
-  # Keep CUDA stack aligned with pod
   pip_in_venv "$VENV_LLM" install \
-    torch==2.4.1 torchvision torchaudio \
+    torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cu124
 
-  # vLLM versions move fast; isolate so failures never break Z-Image.
-  # If this fails, Z-Image still works.
   pip_in_venv "$VENV_LLM" install "vllm==0.5.4" || {
     echo
-    echo "vLLM install failed in venv_llm. Z-Image is unaffected."
-    echo "If you want guaranteed LLM serving, switch this menu option to Ollama."
+    echo "vLLM install failed. Image stack is unaffected."
     echo
     return 1
   }
 
-  say "vLLM installed in $VENV_LLM"
+  say "LLM environment ready"
 }
 
 launch_qwen_vllm() {
   ensure_venv "$VENV_LLM"
   local model="Qwen/Qwen3.5-27B-FP8"
 
-  say "Launching vLLM OpenAI-compatible server on :8000"
-  say "Open WebUI should point to: http://<pod-ip>:8000/v1"
+  say "Launching Qwen vLLM server on :8000"
+  say "Open WebUI base URL: http://<pod-ip>:8000/v1"
 
   "$VENV_LLM/bin/python" -m vllm.entrypoints.openai.api_server \
     --model "$model" \
@@ -189,26 +156,24 @@ menu() {
     echo ""
     echo "==== AI WORKSTATION ===="
     echo "1  System Status"
-    echo "2  Install Z-Image Environment (recommended)"
-    echo "3  Download Z-Image-Turbo"
-    echo "4  Launch Z-Image UI (port 7860)"
-    echo "5  Install LLM Environment (isolated, best-effort)"
+    echo "2  Install Image Environment (ComfyUI)"
+    echo "3  Prepare FLUX Model Folders"
+    echo "4  Launch ComfyUI (port 8188)"
+    echo "5  Install LLM Environment"
     echo "6  Launch Qwen vLLM Server (port 8000)"
-    echo "7  Python Shell (Z-Image venv)"
-    echo "8  Exit"
+    echo "7  Exit"
     echo ""
 
     read -r -p "Select option: " choice
 
     case "$choice" in
       1) system_status ;;
-      2) install_zimage_env ;;
-      3) download_zimage ;;
-      4) launch_zimage_ui ;;
+      2) install_image_env ;;
+      3) download_flux_base ;;
+      4) launch_comfyui ;;
       5) install_llm_env ;;
       6) launch_qwen_vllm ;;
-      7) "$VENV_ZIMG/bin/python" ;;
-      8) exit 0 ;;
+      7) exit 0 ;;
       *) echo "Invalid option" ;;
     esac
   done
