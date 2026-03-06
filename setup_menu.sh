@@ -1,12 +1,9 @@
 #!/bin/bash
 
 WORKSPACE="/workspace"
-MODEL_DIR="$WORKSPACE/models"
 CACHE_DIR="$WORKSPACE/cache"
 SERVER_DIR="$WORKSPACE/servers"
 
-mkdir -p $MODEL_DIR/llm
-mkdir -p $MODEL_DIR/image
 mkdir -p $CACHE_DIR
 mkdir -p $SERVER_DIR
 
@@ -25,25 +22,32 @@ echo ""
 df -h
 
 echo ""
-echo "Workspace contents:"
-ls -al $WORKSPACE
+echo "Python version:"
+python -V
 
 }
 
 install_env() {
 
 echo ""
-echo "Installing environment..."
+echo "Installing AI environment..."
 
 pip install --upgrade pip setuptools wheel
 
-# install CUDA compatible PyTorch
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# install correct PyTorch stack
+pip install torch==2.3.0 torchvision torchaudio \
+--index-url https://download.pytorch.org/whl/cu121
 
-# install AI stack
+# install xformers compatible with vLLM
+pip install xformers==0.0.26.post1
+
+# install vLLM (with dependencies)
+pip install vllm==0.4.2
+
+# install diffusion stack
 pip install \
-transformers==4.41.2 \
-diffusers==0.29.2 \
+diffusers \
+transformers \
 accelerate \
 safetensors \
 huggingface_hub \
@@ -51,9 +55,6 @@ sentencepiece \
 pillow \
 tqdm \
 gradio
-
-# install vLLM pinned version
-pip install vllm==0.4.2 --no-deps
 
 echo ""
 echo "Environment ready."
@@ -95,7 +96,7 @@ import gradio as gr
 
 model_id="Tongyi-MAI/Z-Image-Turbo"
 
-print("Loading model",model_id)
+print("Loading model:",model_id)
 
 pipe=DiffusionPipeline.from_pretrained(
     model_id,
