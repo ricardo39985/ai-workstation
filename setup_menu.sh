@@ -46,8 +46,9 @@ huggingface_hub \
 sentencepiece \
 pillow \
 tqdm \
-gradio \
-vllm==0.4.2
+gradio
+
+pip install vllm==0.4.2 --no-deps
 
 echo ""
 echo "Environment ready."
