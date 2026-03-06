@@ -35,7 +35,7 @@ set -u
 # --------------------
 # IMAGE STACK
 # - ComfyUI runs in its own Python virtual environment
-# - Exposed on port 8188
+# - Exposed on port 8888
 # - Model folders live under /workspace/models
 # - This script prepares the directory structure and ComfyUI model paths
 #
@@ -71,8 +71,8 @@ set -u
 #
 # IMPORTANT OPERATIONAL NOTES
 # ---------------------------
-# - ComfyUI binds to 0.0.0.0:8188 inside the pod. The browser should use the
-#   RunPod HTTP/proxy link for port 8188, NOT http://0.0.0.0:8188 directly.
+# - ComfyUI binds to 0.0.0.0:8888 inside the pod. The browser should use the
+#   RunPod HTTP/proxy link for port 8888, NOT http://0.0.0.0:8888 directly.
 # - vLLM binds to 0.0.0.0:8000 inside the pod. Open WebUI or other clients
 #   should use the RunPod-exposed URL or pod IP/port as appropriate.
 # - This script does NOT automatically download gated or restricted model assets.
@@ -206,11 +206,11 @@ launch_comfyui() {
   ensure_comfyui_repo
   prepare_flux_model_layout
 
-  say "Launching ComfyUI on port 8188"
-  say "Use the RunPod HTTP/proxy link for port 8188 in your browser"
+  say "Launching ComfyUI on port 8888"
+  say "Use the RunPod HTTP/proxy link for port 8888 in your browser"
 
   cd "$COMFY_DIR"
-  "$VENV_IMG/bin/python" main.py --listen 0.0.0.0 --port 8188 --extra-model-paths-config "$COMFY_DIR/extra_model_paths.yaml"
+  "$VENV_IMG/bin/python" main.py --listen 0.0.0.0 --port 8888 --extra-model-paths-config "$COMFY_DIR/extra_model_paths.yaml"
 }
 
 install_llm_env() {
@@ -256,7 +256,7 @@ menu() {
     echo "1  System Status"
     echo "2  Install Image Environment (ComfyUI)"
     echo "3  Prepare Model Folder Layout"
-    echo "4  Launch ComfyUI (port 8188)"
+    echo "4  Launch ComfyUI (port 8888)"
     echo "5  Install LLM Environment"
     echo "6  Launch Qwen vLLM Server (port 8000)"
     echo "7  Exit"
