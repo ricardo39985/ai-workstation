@@ -6,47 +6,41 @@ set -u
 #
 # PURPOSE
 # -------
-# Bootstraps an ephemeral RunPod-based AI workstation with:
+# Bootstraps an ephemeral RunPod AI workstation with:
 # - ComfyUI for image generation UI
-# - vLLM for Qwen LLM serving
+# - A starter SDXL model pack that is actually usable immediately
+# - vLLM for Qwen in a separate venv
 #
 # DESIGN
 # ------
-# - Pod is disposable / ephemeral
-# - Script and repo live in GitHub
-# - Re-clone and rerun on each new pod
+# - Pod is ephemeral/disposable
+# - Script is intended to reconstruct the workstation from scratch
+# - ComfyUI runs on port 8888 because RunPod commonly exposes that already
 # - Image stack and LLM stack are isolated in separate virtualenvs
 #
-# IMPORTANT ACCESS NOTES
-# ----------------------
-# - ComfyUI runs on port 8888 in this script because RunPod commonly exposes
-#   8888 by default (often under the "Jupyter Lab" link).
-# - The browser should NOT use http://0.0.0.0:8888 directly.
-# - Use the RunPod-exposed HTTP/Jupyter link for port 8888.
+# WHAT THIS SCRIPT HANDLES
+# ------------------------
+# - Installs ComfyUI
+# - Creates model folder structure
+# - Downloads an SDXL starter pack:
+#     * SDXL base checkpoint
+#     * SDXL fp16 VAE fix
+# - Prints model directories and discovered files
+# - Launches ComfyUI with clear access notes
 #
-# - vLLM runs on port 8000.
-# - Open WebUI or any OpenAI-compatible client should point to the RunPod-
-#   exposed endpoint for port 8000, typically:
-#     http://<pod-ip>:8000/v1
-#
-# DIRECTORY LAYOUT
-# ----------------
-# /workspace/hf_cache
-# /workspace/models
+# MODEL DIRECTORIES
+# -----------------
 # /workspace/models/checkpoints
 # /workspace/models/loras
 # /workspace/models/text_encoders
 # /workspace/models/vae
 # /workspace/models/clip_vision
-# /workspace/repos/ComfyUI
-# /workspace/venv_img
-# /workspace/venv_llm
 #
-# INTENT
-# ------
-# This script should handle the infrastructure and print everything needed to
-# operate the pod. It should not force the user to guess paths, ports, or
-# whether models are present.
+# IMPORTANT ACCESS NOTE
+# ---------------------
+# - ComfyUI binds to 0.0.0.0:8888 inside the pod.
+# - In your browser, use the RunPod-exposed link for port 8888.
+#   Do NOT browse directly to 0.0.0.0.
 ###############################################################################
 
 WORKSPACE="/workspace"
@@ -134,6 +128,11 @@ pip_in_venv() {
   "$venv_path/bin/python" -m pip "$@"
 }
 
+python_in_venv() {
+  local venv_path="$1"; shift
+  "$venv_path/bin/python" "$@"
+}
+
 ensure_comfyui_repo() {
   if [ ! -d "$COMFY_DIR/.git" ]; then
     say "Cloning ComfyUI"
@@ -157,6 +156,7 @@ install_image_env() {
     --index-url https://download.pytorch.org/whl/cu124
 
   pip_in_venv "$VENV_IMG" install -r "$COMFY_DIR/requirements.txt"
+  pip_in_venv "$VENV_IMG" install huggingface_hub hf_transfer
 
   say "Image environment ready"
   print_paths
@@ -181,6 +181,53 @@ EOF
   echo "ComfyUI extra model path config written to:"
   echo "  $COMFY_DIR/extra_model_paths.yaml"
   echo ""
+  print_model_layout
+}
+
+install_sdxl_starter_pack() {
+  ensure_venv "$VENV_IMG"
+  prepare_model_layout
+
+  say "Installing SDXL starter pack"
+  echo "This will download:"
+  echo "  - SDXL base checkpoint -> $MODEL_DIR/checkpoints"
+  echo "  - SDXL fp16 VAE fix    -> $MODEL_DIR/vae"
+  echo ""
+
+  python_in_venv "$VENV_IMG" - <<'PY'
+from huggingface_hub import hf_hub_download
+from pathlib import Path
+
+checkpoint_dir = Path("/workspace/models/checkpoints")
+vae_dir = Path("/workspace/models/vae")
+checkpoint_dir.mkdir(parents=True, exist_ok=True)
+vae_dir.mkdir(parents=True, exist_ok=True)
+
+print("Downloading SDXL base checkpoint...")
+hf_hub_download(
+    repo_id="stabilityai/stable-diffusion-xl-base-1.0",
+    filename="sd_xl_base_1.0_0.9vae.safetensors",
+    local_dir=str(checkpoint_dir),
+    local_dir_use_symlinks=False,
+)
+
+print("Downloading SDXL VAE fp16 fix...")
+hf_hub_download(
+    repo_id="madebyollin/sdxl-vae-fp16-fix",
+    filename="sdxl.vae.safetensors",
+    local_dir=str(vae_dir),
+    local_dir_use_symlinks=False,
+)
+
+print("SDXL starter pack download complete.")
+PY
+
+  echo ""
+  echo "Installed files should now exist in:"
+  echo "  $MODEL_DIR/checkpoints"
+  echo "  $MODEL_DIR/vae"
+  echo ""
+
   print_model_layout
 }
 
@@ -294,12 +341,13 @@ menu() {
     echo "1  System Status"
     echo "2  Install Image Environment (ComfyUI)"
     echo "3  Prepare Model Folder Layout"
-    echo "4  Show Model Directory Status"
-    echo "5  Launch ComfyUI (port ${COMFY_PORT})"
-    echo "6  Install LLM Environment"
-    echo "7  Launch Qwen vLLM Server (port ${LLM_PORT})"
-    echo "8  Show Access Notes"
-    echo "9  Exit"
+    echo "4  Install SDXL Starter Pack"
+    echo "5  Show Model Directory Status"
+    echo "6  Launch ComfyUI (port ${COMFY_PORT})"
+    echo "7  Install LLM Environment"
+    echo "8  Launch Qwen vLLM Server (port ${LLM_PORT})"
+    echo "9  Show Access Notes"
+    echo "10 Exit"
     echo ""
 
     read -r -p "Select option: " choice
@@ -308,12 +356,13 @@ menu() {
       1) system_status ;;
       2) install_image_env ;;
       3) prepare_model_layout ;;
-      4) print_model_layout ;;
-      5) launch_comfyui ;;
-      6) install_llm_env ;;
-      7) launch_qwen_vllm ;;
-      8) write_access_notes; cat "$WORKSPACE/ACCESS_NOTES.txt" ;;
-      9) exit 0 ;;
+      4) install_sdxl_starter_pack ;;
+      5) print_model_layout ;;
+      6) launch_comfyui ;;
+      7) install_llm_env ;;
+      8) launch_qwen_vllm ;;
+      9) write_access_notes; cat "$WORKSPACE/ACCESS_NOTES.txt" ;;
+      10) exit 0 ;;
       *) echo "Invalid option" ;;
     esac
   done
